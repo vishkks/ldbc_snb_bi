@@ -30,42 +30,6 @@ CREATE TABLE TagClass (
     SubclassOfTagClassId bigint
 );
 
--- static tables / separate table per individual subtype
-
--- CREATE TABLE Company (
---     id bigint not null,
---     name varchar(256) not null,
---     url varchar(256) not null,
---     isLocatedIn_Country bigint
--- );
-
--- CREATE TABLE University (
---     id bigint not null,
---     name varchar(256) not null,
---     url varchar(256) not null,
---     isLocatedIn_City bigint
--- );
-
--- CREATE TABLE Continent (
---     id bigint not null,
---     name varchar(256) not null,
---     url varchar(256) not null
--- );
-
--- CREATE TABLE Country (
---     id bigint not null,
---     name varchar(256) not null,
---     url varchar(256) not null,
---     isPartOf_Continent bigint
--- );
-
--- CREATE TABLE City (
---     id bigint not null,
---     name varchar(256) not null,
---     url varchar(256) not null,
---     isPartOf_Country bigint
--- );
-
 -- dynamic tables
 
 CREATE TABLE Comment (
@@ -126,4 +90,4 @@ CREATE TABLE Person_likes_Comment      (creationDate timestamp without time zone
 CREATE TABLE Person_likes_Post         (creationDate timestamp without time zone not null, PersonId bigint not null,  PostId bigint not null);
 CREATE TABLE Person_studyAt_University (creationDate timestamp without time zone not null, PersonId bigint not null,  UniversityId bigint not null, classYear int not null);
 CREATE TABLE Person_workAt_Company     (creationDate timestamp without time zone not null, PersonId bigint not null,  CompanyId bigint not null, workFrom  int not null);
-CREATE TABLE Person_knows_Person       (creationDate timestamp without time zone not null, Person1id bigint not null, Person2id bigint not null);
+CREATE TABLE Person_knows_Person       (creationDate timestamp without time zone not null, Person1id bigint not null, Person2id bigint not null)

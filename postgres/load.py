@@ -29,10 +29,16 @@ def load_script(filename):
     with open(filename, "r") as f:
         return f.read()
 
-con.execute(load_script("ddl/drop-views.sql"))
-con.execute(load_script("ddl/drop-tables.sql"))
-con.execute(load_script("ddl/schema-composite-merged-fk.sql"))
-con.execute(load_script("ddl/schema-delete-candidates.sql"))
+def run_script(con, filename):
+    script = load_script(filename)
+    for command in script.split(";"):
+        print(command)
+        con.execute(command)
+
+# run_script(con, "ddl/drop-views.sql")
+# run_script(con, "ddl/drop-tables.sql")
+run_script(con, "ddl/schema-composite-merged-fk.sql")
+run_script(con, "ddl/schema-delete-candidates.sql")
 
 print("Load initial snapshot")
 
@@ -51,11 +57,13 @@ for entity in static_entities:
     for csv_file in [f for f in os.listdir(f"{static_path}/{entity}") if f.endswith(".csv")]:
         csv_path = f"{static_path}/{entity}/{csv_file}"
         print(f"- {csv_path}")
-        #con.execute(f"COPY {entity} FROM '{csv_path}' (DELIMITER '|', HEADER)")
+        #con.execute(f"COPY {entity} FROM '{csv_path}' (DELIMITER '|', HEADER, TIMESTAMPFORMAT '%Y-%m-%dT%H:%M:%S.%g+00:00')")
         ### PG
-        #print(f"COPY {entity} FROM '/data/initial_snapshot/static/{entity}/{csv_file}' (DELIMITER '|', HEADER, FORMAT csv)")
-        con.execute(f"COPY {entity} FROM '/data/initial_snapshot/static/{entity}/{csv_file}' (DELIMITER '|', HEADER, FORMAT csv)")
+        print(f"COPY {entity} FROM '/data/initial_snapshot/static/{entity}/{csv_file}' (DELIMITER '|', HEADER, TIMESTAMPFORMAT '%Y-%m-%dT%H:%M:%S.%g+00:00', FORMAT csv)")
+        con.execute(f"COPY {entity} FROM '/data/initial_snapshot/static/{entity}/{csv_file}' (DELIMITER '|', HEADER, TIMESTAMPFORMAT '%Y-%m-%dT%H:%M:%S.%g+00:00', FORMAT csv)")
+        print("X")
         pg_con.commit()
+        print("Y")
 
 print("## Dynamic entities")
 
@@ -63,16 +71,15 @@ for entity in dynamic_entities:
     for csv_file in [f for f in os.listdir(f"{dynamic_path}/{entity}") if f.endswith(".csv")]:
         csv_path = f"{dynamic_path}/{entity}/{csv_file}"
         print(f"- {csv_path}")
-        #con.execute(f"COPY {entity} FROM '{csv_path}' (DELIMITER '|', HEADER, TIMESTAMPFORMAT '%Y-%m-%dT%H:%M:%S.%g+00:00')")
+        #con.execute(f"COPY {entity} FROM '{csv_path}' (DELIMITER '|', HEADER, TIMESTAMPFORMAT '%Y-%m-%dT%H:%M:%S.%g+00:00', TIMESTAMPFORMAT '%Y-%m-%dT%H:%M:%S.%g+00:00')")
         ### PG
-        #print(f"COPY {entity} FROM '/data/initial_snapshot/dynamic/{entity}/{csv_file}' (DELIMITER '|', HEADER, FORMAT csv)")
-        con.execute(f"COPY {entity} FROM '/data/initial_snapshot/dynamic/{entity}/{csv_file}' (DELIMITER '|', HEADER, FORMAT csv)")
+        #print(f"COPY {entity} FROM '/data/initial_snapshot/dynamic/{entity}/{csv_file}' (DELIMITER '|', HEADER, TIMESTAMPFORMAT '%Y-%m-%dT%H:%M:%S.%g+00:00', FORMAT csv)")
+        con.execute(f"COPY {entity} FROM '/data/initial_snapshot/dynamic/{entity}/{csv_file}' (DELIMITER '|', HEADER, TIMESTAMPFORMAT '%Y-%m-%dT%H:%M:%S.%g+00:00', FORMAT csv)")
         pg_con.commit()
 
 # ALTER TABLE is not yet supported in DuckDB
 ### PG
-constraints = load_script("ddl/constraints.sql")
-con.execute(constraints)
+run_script(con, "ddl/constraints.sql")
 pg_con.commit()
 
 print("Vacuuming")

@@ -28,14 +28,32 @@ if [ ! -d ${POSTGRES_CSV_DIR} ]; then
     exit 1
 fi
 
+export UMBRA_CONTAINER_NAME=snb-umbra
+
+# TODO: scratch dir
+
+# start the container
 docker run --rm \
     --publish=5432:5432 \
-    --name ${POSTGRES_CONTAINER_NAME} \
+    --name ${UMBRA_CONTAINER_NAME} \
     --env POSTGRES_PASSWORD=${POSTGRES_PASSWORD} \
     --volume=${POSTGRES_CSV_DIR}:/data \
+    --volume=/home/szarnyasg/git/snb/lsqb/umb/scratch:/scratch \
     --detach \
-    --shm-size=${POSTGRES_SHARED_MEMORY} \
-    postgres:${POSTGRES_VERSION}
+    umbra-fedora
+
+docker exec \
+    --interactive \
+    ${UMBRA_CONTAINER_NAME} \
+    /umbra/bin/sql \
+    --createdb /scratch/ldbc.db \
+    /scratch/create-role.sql
+
+docker exec \
+    --detach \
+    ${UMBRA_CONTAINER_NAME} \
+    /umbra/bin/server \
+    -address 0.0.0.0 /scratch/ldbc.db
 
 echo -n "Waiting for the database to start ."
 until python3 scripts/test-db-connection.py > /dev/null 2>&1; do
