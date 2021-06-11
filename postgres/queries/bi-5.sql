@@ -7,20 +7,17 @@ SELECT CreatorPerson.id AS CreatorPersonId
      , count(DISTINCT Person_likes_Message.MessageId||' '||Person_likes_Message.PersonId) AS likeCount
      , count(DISTINCT Message.Id)  AS messageCount
      , NULL as score
-  FROM Tag
-     , Message_hasTag_Tag
-     , Message
+  FROM Message_hasTag_Tag
+  JOIN Message
+    ON Message.id = Message_hasTag_Tag.MessageId
   LEFT JOIN Comment
          ON Message.id = coalesce(Comment.ParentPostId, Comment.ParentCommentId)
   LEFT JOIN Person_likes_Message
          ON Message.id = Person_likes_Message.MessageId
-     , Person CreatorPerson -- creator
- WHERE
-    -- join
-       Tag.id = Message_hasTag_Tag.TagId
-   AND Message_hasTag_Tag.MessageId = Message.id
-   AND Message.CreatorPersonId = CreatorPerson.id
-    -- filter
+  JOIN Person CreatorPerson
+    ON CreatorPerson.id = Message.CreatorPersonId
+  JOIN Tag
+    ON Tag.id = Message_hasTag_Tag.TagId
    AND Tag.name = :tag
  GROUP BY CreatorPerson.id
 )
