@@ -1,0 +1,24 @@
+CREATE OR REPLACE DISTRIBUTED QUERY bi6(STRING tag) SYNTAX v2 {
+  TYPEDEF TUPLE <UINT personId, UINT authorityScore> RESULT;
+  HeapAccum<RESULT>(100, authorityScore DESC, personId ASC) @@result;
+  SumAccum<UINT> @authorityScore;
+  MapAccum<VERTEX<Person>, MinAccum<UINT>> @pScore;
+  //propagate this down, to two places? Will this be handled by the optimizer?
+  /*message1 = SELECT m FROM Tag:t -(<HAS_TAG)- (Comment|Post):m WHERE t.name == tag;*/
+  //using a mapaccum can i propagate this down too?? CHECK
+  tmp = SELECT m FROM Tag:t -(<HAS_TAG)- (Comment|Post):m -(<LIKES)- Person:p2
+    WHERE t.name == tag
+    ACCUM m.@pScore += (p2->p2.popularityScore);
+    
+  person1 =
+    SELECT p1
+    FROM Tag:t -(<HAS_TAG)- (Comment|Post):m -(HAS_CREATOR>)- Person:p1
+    WHERE t.name == tag
+    ACCUM p1.@pScore += m.@pScore
+    POST-ACCUM 
+      FOREACH (p,score) IN p1.@pScore DO
+        p1.@authorityScore += score
+      END,
+      @@result += RESULT(p1.id, p1.@authorityScore), p1.@pScore.clear();
+  PRINT @@result as result;
+}

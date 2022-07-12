@@ -1,0 +1,28 @@
+CREATE OR REPLACE DISTRIBUTED QUERY bi5(STRING tag) SYNTAX v2 {
+
+  TYPEDEF TUPLE <UINT personId, UINT replyCount, UINT likeCount, UINT messageCount, UINT score> RESULT;
+
+  HeapAccum<RESULT>(100, score DESC, personId ASC) @@result;
+
+  SumAccum<UINT> @likeCount;
+  SumAccum<UINT> @messageCount;
+  SumAccum<UINT> @replyCount;
+
+  //propogate this to lower level
+  /*T = SELECT t FROM Tag:t WHERE t.name == tag;*/
+  //propagate this also to the lower level
+  /*messages = SELECT m FROM Tag:t -(<HAS_TAG)- (Comment|Post):m WHERE t.name == tag;*/
+  tmp =
+    SELECT p
+    FROM Tag:t -(<HAS_TAG)- (Comment|Post):m -(HAS_CREATOR>)- Person:p
+    WHERE t.name == tag
+    ACCUM
+      p.@replyCount += m.outdegree("REPLY_OF_REVERSE"),
+      p.@likeCount += m.outdegree("LIKES_REVERSE"),
+      p.@messageCount += 1
+    POST-ACCUM
+      @@result += RESULT(p.id, p.@replyCount, p.@likeCount, p.@messageCount,
+        p.@messageCount + 2*p.@replyCount + 10*p.@likeCount);
+
+  PRINT @@result as result;
+}
