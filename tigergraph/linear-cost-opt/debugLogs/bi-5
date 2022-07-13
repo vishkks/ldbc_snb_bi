@@ -1,4 +1,4 @@
-D@20220713 08:14:04.250 tigergraph|127.0.0.1:50602|00000000837 (Util.java:1978) The original query is: 
+D@20220713 19:00:13.396 tigergraph|127.0.0.1:60976|00000001494 (Util.java:1978) The original query is: 
 CREATE OR REPLACE DISTRIBUTED QUERY bi5(STRING tag) SYNTAX _v2 {
 
   TYPEDEF TUPLE <UINT personId, UINT replyCount, UINT likeCount, UINT messageCount, UINT score> RESULT;
@@ -12,7 +12,7 @@ CREATE OR REPLACE DISTRIBUTED QUERY bi5(STRING tag) SYNTAX _v2 {
   //propogate this to lower level
   /*T = SELECT t FROM Tag:t WHERE t.name == tag;*/
   //propagate this also to the lower level
-  /*messages = SELECT m FROM T:t -(<HAS_TAG)- (Comment|Post):m;*/
+  /*messages = SELECT m FROM T:t -(<HAS_TAG)- (Comment|Post):m WHERE t.name == tag;*/
   tmp =
     SELECT p
     FROM Tag:t -(<HAS_TAG)- (Comment|Post):m -(HAS_CREATOR>)- Person:p
@@ -28,14 +28,10 @@ CREATE OR REPLACE DISTRIBUTED QUERY bi5(STRING tag) SYNTAX _v2 {
   PRINT @@result as result;
 }
 ----------------------------------
-I@20220713 08:14:04.250 tigergraph|127.0.0.1:50602|00000000837 (CatalogManager.java:811) getCatalog: ldbc_snb
-D@20220713 08:14:04.250 tigergraph|127.0.0.1:50602|00000000837 (Util.java:1978) After cost-optimization: 
+D@20220713 19:00:13.396 tigergraph|127.0.0.1:60976|00000001494 (Util.java:1978) After cost-optimization: 
 CREATE OR REPLACE DISTRIBUTED QUERY bi5(STRING tag) SYNTAX _v2 {
 
   TYPEDEF TUPLE <UINT personId, UINT replyCount, UINT likeCount, UINT messageCount, UINT score> RESULT;
-
-// global vertex set accum used for jumps
-SetAccum<VERTEX> @@JumpVS;
 
   HeapAccum<RESULT>(100, score DESC, personId ASC) @@result;
 
@@ -46,34 +42,22 @@ SetAccum<VERTEX> @@JumpVS;
   //propogate this to lower level
   /*T = SELECT t FROM Tag:t WHERE t.name == tag;*/
   //propagate this also to the lower level
-  /*messages = SELECT m FROM T:t -(<HAS_TAG)- (Comment|Post):m;*/
+  /*messages = SELECT m FROM T:t -(<HAS_TAG)- (Comment|Post):m WHERE t.name == tag;*/
   /* __TF_HOP_BEGIN:15 */
-// src id and multiplicity propagation accum(s)
-MapAccum<VERTEX, SumAccum<int>> @propagAcc_0;
-
 // multiplicity propagation accum(s)
 SumAccum<int> @propagAcc_1;
 
-//traverse
+//pre-filter
 VS_t =
-        SELECT t
-        FROM (Post|Comment):m -(HAS_TAG>:_e)- _:t
-        WHERE t.name == tag
-        ACCUM t.@propagAcc_0 += (m -> 1);
-
-//jump
-VS_t = 
         SELECT t 
-        FROM VS_t:t 
-        ACCUM 
-                foreach (m, mult) in t.@propagAcc_0 do
-                        m.@propagAcc_1 += mult
-                        ,@@JumpVS += m 
-                end 
-        POST-ACCUM t.@propagAcc_0.clear();
+        FROM Tag:t 
+        WHERE t.name == tag;
 
-VS_m = {@@JumpVS};
-@@JumpVS.clear();
+//traverse
+VS_m =
+        SELECT m
+        FROM VS_t:t -(<HAS_TAG:_e)- (Post|Comment):m
+        ACCUM m.@propagAcc_1 += 1;
 
 //post-processing: last hop
 tmp = 
