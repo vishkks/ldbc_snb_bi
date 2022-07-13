@@ -1,0 +1,96 @@
+D@20220713 07:55:09.870 tigergraph|127.0.0.1:43974|00000000808 (Util.java:1978) The original query is: 
+CREATE OR REPLACE DISTRIBUTED QUERY bi3(STRING tagClass, STRING country) SYNTAX _v2 {
+  TYPEDEF TUPLE <UINT forumId, STRING forumTitle, STRING forumCreationDate, UINT personId, UINT messageCount> RESULT;
+  HeapAccum<RESULT>(20, messageCount DESC, forumId ASC) @@result;
+  SumAccum<UINT> @messageCount;
+  MinAccum<UINT> @personId;
+  OrAccum <BOOL> @selected;
+  
+  //remove the two accums here and propogate it to the last query here so that the linear cost opt will be able to break it
+  
+  forums =
+    SELECT f
+    FROM Country:cn -(<IS_PART_OF.<IS_LOCATED_IN)- Person:p -(<HAS_MODERATOR)- Forum:f
+    WHERE cn.name == country
+    ACCUM f.@personId = p.id, f.@selected += true;
+    
+    /*
+  messages =
+    SELECT m
+    FROM TagClass:t -(<HAS_TYPE.<HAS_TAG)- (Comment|Post):m
+    WHERE t.name == tagClass;
+    */
+  tmp =
+    SELECT f
+    FROM  TagClass:t -(<HAS_TYPE.<HAS_TAG)- (Comment|Post):m -(ROOT_FORUM>)- Forum:f
+    WHERE t.name == tagClass
+    PER(m,f) // Since each message finally replies to one Post, this PER does not change results but improve performance.
+    ACCUM f.@messageCount += 1
+    POST-ACCUM @@result += RESULT(f.id, f.title, ms_to_string(f.creationDate), f.@personId, f.@messageCount);
+
+  PRINT @@result as result;
+}
+----------------------------------
+D@20220713 07:55:09.870 tigergraph|127.0.0.1:43974|00000000808 (Util.java:1978) After cost-optimization: 
+CREATE OR REPLACE DISTRIBUTED QUERY bi3(STRING tagClass, STRING country) SYNTAX _v2 {
+  TYPEDEF TUPLE <UINT forumId, STRING forumTitle, STRING forumCreationDate, UINT personId, UINT messageCount> RESULT;
+
+// global vertex set accum used for jumps
+SetAccum<VERTEX> @@JumpVS;
+  HeapAccum<RESULT>(20, messageCount DESC, forumId ASC) @@result;
+  SumAccum<UINT> @messageCount;
+  MinAccum<UINT> @personId;
+  OrAccum <BOOL> @selected;
+  
+  //remove the two accums here and propogate it to the last query here so that the linear cost opt will be able to break it
+  
+  /* __TF_HOP_BEGIN:10 */
+// src id propagation accum(s)
+SetAccum<VERTEX> @propagAcc_0;
+
+//traverse
+VS_cn =
+        SELECT cn
+        FROM Person:p -(IS_LOCATED_IN>:_e_1)- _:_v -(IS_PART_OF>:_e)- _:cn
+        WHERE cn.name == country
+        ACCUM cn.@propagAcc_0 += p;
+
+//jump
+VS_cn = 
+        SELECT cn 
+        FROM VS_cn:cn 
+        ACCUM 
+                foreach p in cn.@propagAcc_0 do
+                        @@JumpVS += p 
+                end 
+        POST-ACCUM cn.@propagAcc_0.clear();
+
+VS_p = {@@JumpVS};
+@@JumpVS.clear();
+
+//post-processing: last hop
+forums = 
+        SELECT f 
+        FROM VS_p:p -(<HAS_MODERATOR:_e_2)- _:f 
+        ACCUM  f.@personId = p.id, f.@selected += true;
+
+/* __TF_HOP_END:14 */
+    
+    /*
+  messages =
+    SELECT m
+    FROM TagClass:t -(<HAS_TYPE.<HAS_TAG)- (Comment|Post):m
+    WHERE t.name == tagClass;
+    */
+  /* __TF_HOP_BEGIN:22 */
+tmp =
+        SELECT f
+        FROM TagClass:t-( <HAS_TYPE :_e_3 )-  :_v_1  -( <HAS_TAG :_e_4 )-(Comment|Post):m-( ROOT_FORUM> :_e_5 )-Forum:f
+        WHERE t.name == tagClass
+        PER LASTHOP-SRC TGT
+        ACCUM f.@messageCount += 1
+        POST-ACCUM @@result += RESULT(f.id, f.title, ms_to_string(f.creationDate), f.@personId, f.@messageCount);
+/* __TF_HOP_END:28 */
+
+  PRINT @@result as result;
+}

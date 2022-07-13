@@ -1,0 +1,94 @@
+D@20220713 08:14:04.250 tigergraph|127.0.0.1:50602|00000000837 (Util.java:1978) The original query is: 
+CREATE OR REPLACE DISTRIBUTED QUERY bi5(STRING tag) SYNTAX _v2 {
+
+  TYPEDEF TUPLE <UINT personId, UINT replyCount, UINT likeCount, UINT messageCount, UINT score> RESULT;
+
+  HeapAccum<RESULT>(100, score DESC, personId ASC) @@result;
+
+  SumAccum<UINT> @likeCount;
+  SumAccum<UINT> @messageCount;
+  SumAccum<UINT> @replyCount;
+
+  //propogate this to lower level
+  /*T = SELECT t FROM Tag:t WHERE t.name == tag;*/
+  //propagate this also to the lower level
+  /*messages = SELECT m FROM T:t -(<HAS_TAG)- (Comment|Post):m;*/
+  tmp =
+    SELECT p
+    FROM Tag:t -(<HAS_TAG)- (Comment|Post):m -(HAS_CREATOR>)- Person:p
+    WHERE t.name == tag
+    ACCUM
+      p.@replyCount += m.outdegree("REPLY_OF_REVERSE"),
+      p.@likeCount += m.outdegree("LIKES_REVERSE"),
+      p.@messageCount += 1
+    POST-ACCUM
+      @@result += RESULT(p.id, p.@replyCount, p.@likeCount, p.@messageCount,
+        p.@messageCount + 2*p.@replyCount + 10*p.@likeCount);
+
+  PRINT @@result as result;
+}
+----------------------------------
+I@20220713 08:14:04.250 tigergraph|127.0.0.1:50602|00000000837 (CatalogManager.java:811) getCatalog: ldbc_snb
+D@20220713 08:14:04.250 tigergraph|127.0.0.1:50602|00000000837 (Util.java:1978) After cost-optimization: 
+CREATE OR REPLACE DISTRIBUTED QUERY bi5(STRING tag) SYNTAX _v2 {
+
+  TYPEDEF TUPLE <UINT personId, UINT replyCount, UINT likeCount, UINT messageCount, UINT score> RESULT;
+
+// global vertex set accum used for jumps
+SetAccum<VERTEX> @@JumpVS;
+
+  HeapAccum<RESULT>(100, score DESC, personId ASC) @@result;
+
+  SumAccum<UINT> @likeCount;
+  SumAccum<UINT> @messageCount;
+  SumAccum<UINT> @replyCount;
+
+  //propogate this to lower level
+  /*T = SELECT t FROM Tag:t WHERE t.name == tag;*/
+  //propagate this also to the lower level
+  /*messages = SELECT m FROM T:t -(<HAS_TAG)- (Comment|Post):m;*/
+  /* __TF_HOP_BEGIN:15 */
+// src id and multiplicity propagation accum(s)
+MapAccum<VERTEX, SumAccum<int>> @propagAcc_0;
+
+// multiplicity propagation accum(s)
+SumAccum<int> @propagAcc_1;
+
+//traverse
+VS_t =
+        SELECT t
+        FROM (Post|Comment):m -(HAS_TAG>:_e)- _:t
+        WHERE t.name == tag
+        ACCUM t.@propagAcc_0 += (m -> 1);
+
+//jump
+VS_t = 
+        SELECT t 
+        FROM VS_t:t 
+        ACCUM 
+                foreach (m, mult) in t.@propagAcc_0 do
+                        m.@propagAcc_1 += mult
+                        ,@@JumpVS += m 
+                end 
+        POST-ACCUM t.@propagAcc_0.clear();
+
+VS_m = {@@JumpVS};
+@@JumpVS.clear();
+
+//post-processing: last hop
+tmp = 
+        SELECT p 
+        FROM VS_m:m -(HAS_CREATOR>:_e_1)- _:p 
+        ACCUM 
+    
+      p.@replyCount += m.@propagAcc_1 * (m.outdegree("REPLY_OF_REVERSE")) ,
+      p.@likeCount += m.@propagAcc_1 * (m.outdegree("LIKES_REVERSE")) ,
+      p.@messageCount += m.@propagAcc_1 * (1)  
+        POST-ACCUM
+      @@result += RESULT(p.id, p.@replyCount, p.@likeCount, p.@messageCount,
+        p.@messageCount + 2*p.@replyCount + 10*p.@likeCount);
+
+/* __TF_HOP_END:25 */
+
+  PRINT @@result as result;
+}

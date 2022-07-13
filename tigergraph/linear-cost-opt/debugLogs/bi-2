@@ -1,0 +1,182 @@
+@20220713 07:13:54.808 tigergraph|127.0.0.1:37822|00000000712 (Util.java:1978) The original query is: 
+
+
+CREATE OR REPLACE DISTRIBUTED QUERY bi2(DATETIME date, STRING tagClass) SYNTAX _v2 {
+
+  TYPEDEF TUPLE <STRING tagName, INT countWindow1, INT countWindow2, INT diff> RESULT;
+  HeapAccum<RESULT>(100, diff DESC, tagName ASC) @@result;
+  SumAccum<INT> @countWindow1;
+  SumAccum<INT> @countWindow2;
+  INT dateEpoch = datetime_to_epoch(date) * 1000;
+  INT dateEnd1 = datetime_to_epoch(datetime_add(date, INTERVAL 100 DAY)) * 1000;
+  INT dateEnd2 = datetime_to_epoch(datetime_add(date, INTERVAL 200 DAY)) * 1000;
+
+  //tags under tag class can be propogated to the next tmp query;
+  /*
+  tagsUnderTagClass = SELECT t 
+    FROM TagClass:tc -(<HAS_TYPE)- Tag:t
+    WHERE tc.name == tagClass;
+  */
+  
+  tmp =
+    SELECT m
+    FROM TagClass:tc -(<HAS_TYPE)- Tag:t -(<HAS_TAG)- (Comment|Post):m
+    WHERE dateEpoch <= m.creationDate AND m.creationDate < dateEnd2 
+    AND tc.name == tagClass
+    ACCUM
+      IF m.creationDate < dateEnd1 THEN 
+        t.@countWindow1 += 1
+      ELSE 
+        t.@countWindow2 += 1
+      END
+    POST-ACCUM
+      @@result += RESULT(t.name, t.@countWindow1, t.@countWindow2, abs(t.@countWindow1 - t.@countWindow2));
+
+  tmp =
+    SELECT t
+    FROM TagClass:tc -(<HAS_TYPE) - Tag:t 
+    WHERE t.@countWindow1 == 0 AND t.@countWindow2 == 0 AND tc.name == tagClass
+    ACCUM @@result += RESULT(t.name, 0,0,0);
+
+  PRINT @@result as result;
+}
+----------------------------------
+D@20220713 07:13:54.808 tigergraph|127.0.0.1:37822|00000000712 (Util.java:1978) After cost-optimization: 
+CREATE OR REPLACE DISTRIBUTED QUERY bi2(DATETIME date, STRING tagClass) SYNTAX _v2 {
+
+  TYPEDEF TUPLE <STRING tagName, INT countWindow1, INT countWindow2, INT diff> RESULT;
+/* __TF_HOP_BEGIN:0 */
+GroupByAccum<vertex<TagClass> tc__, SumAccum<int> mult> @propagAcc_0_to_1;
+        GroupByAccum<vertex<Tag> t__, SumAccum<int> mult> @propagAcc_1_to_2;
+        GroupByAccum<vertex m__, int m__creationDate, vertex<Tag> t__, SumAccum<int> mult> @matches_at_0;
+        GroupByAccum<vertex m__, int m__creationDate, SumAccum<int> mult> @matches_at_1;
+        SetAccum<vertex<Tag>> @@VSAcc_t;
+        SetAccum<vertex> @@VSAcc_m;
+        SetAccum<vertex<TagClass>> @@VSAcc_tc;
+/* __TF_HOP_END:0 */
+  HeapAccum<RESULT>(100, diff DESC, tagName ASC) @@result;
+  SumAccum<INT> @countWindow1;
+  SumAccum<INT> @countWindow2;
+  INT dateEpoch = datetime_to_epoch(date) * 1000;
+  INT dateEnd1 = datetime_to_epoch(datetime_add(date, INTERVAL 100 DAY)) * 1000;
+  INT dateEnd2 = datetime_to_epoch(datetime_add(date, INTERVAL 200 DAY)) * 1000;
+
+  //tags under tag class can be propogated to the next tmp query;
+  /*
+  tagsUnderTagClass = SELECT t 
+    FROM TagClass:tc -(<HAS_TYPE)- Tag:t
+    WHERE tc.name == tagClass;
+  */
+  
+  /* __TF_HOP_BEGIN:18 */
+
+
+
+// traverse tc --> t
+VS_t =
+        SELECT t
+        FROM Tag:t -(HAS_TYPE>:_e)- _:tc
+        WHERE  tc.name == tagClass
+        ACCUM  t.@propagAcc_0_to_1 += (tc -> 1);
+
+
+// traverse t --> m
+//pre-filter
+VS_m_1 =
+        SELECT m 
+        FROM (Post|Comment):m 
+        WHERE dateEpoch <= m.creationDate and m.creationDate < dateEnd2;
+
+// mark vertices in vsets
+OrAccum @in_VS_t;
+VS_t = SELECT v FROM VS_t :v ACCUM v.@in_VS_t = true;
+
+VS_m = 
+        SELECT m
+        FROM VS_m_1:m -(HAS_TAG>:_e_1)-_:t
+        WHERE  dateEpoch <= m.creationDate and m.creationDate < dateEnd2 AND t.@in_VS_t
+
+        ACCUM  m.@propagAcc_1_to_2 += (t -> 1);
+
+
+// jump back m --> t
+VS_m = 
+        SELECT m
+        FROM   VS_m:m
+        ACCUM  foreach (t, m_0) in m.@propagAcc_1_to_2 do
+                 t.@matches_at_1 += (m, m.creationDate -> m_0),
+                 @@VSAcc_t += t
+               end
+        POST-ACCUM m.@propagAcc_1_to_2.clear();
+
+// Reset propagation accums of vertices to be filtered away.
+VS_t_filtered(Tag) = {@@VSAcc_t};
+VS_t_filtered = VS_t_filtered minus VS_t;
+VS_t_filtered = SELECT t FROM VS_t_filtered:t POST-ACCUM t.@matches_at_1.clear(), t.@propagAcc_0_to_1.clear();
+// Filter VS_t.
+VS_t(Tag) = {@@VSAcc_t}; @@VSAcc_t.clear();
+
+
+// jump back t --> tc
+VS_t = 
+        SELECT t
+        FROM   VS_t:t
+        ACCUM  foreach (tc, m_1) in t.@propagAcc_0_to_1 do
+                 foreach (m__, m__creationDate, m_2) in t.@matches_at_1 do
+                   tc.@matches_at_0 += (m__, m__creationDate, t -> m_1 * m_2)
+                 end,
+                 @@VSAcc_tc += tc
+               end
+        POST-ACCUM t.@propagAcc_0_to_1.clear(),
+                   t.@matches_at_1.clear();
+// Filter VS_tc.
+VS_tc(TagClass) = {@@VSAcc_tc}; @@VSAcc_tc.clear();
+
+
+
+// USER ACCUM CLAUSE
+VS_tc = 
+        SELECT tc
+        FROM   VS_tc:tc
+        ACCUM  foreach (m__, m__creationDate, t__, mult_3) in tc.@matches_at_0 do
+               
+                      @@VSAcc_m += m__,
+                      @@VSAcc_t += t__,
+                 
+         
+      IF m__creationDate < dateEnd1 THEN 
+        t__.@countWindow1 += mult_3 * (1) 
+      ELSE 
+        t__.@countWindow2 += mult_3 * (1) 
+      END
+               end
+        POST-ACCUM tc.@matches_at_0.clear();
+VS_m(Comment|Post) = {@@VSAcc_m}; @@VSAcc_m.clear();
+VS_t(Tag) = {@@VSAcc_t}; @@VSAcc_t.clear();
+
+// USER POST-ACCUM CLAUSE
+VS_t = 
+        SELECT t
+        FROM   VS_t:t
+        POST-ACCUM
+      @@result += RESULT(t.name, t.@countWindow1, t.@countWindow2, abs(t.@countWindow1 - t.@countWindow2));
+
+tmp  = VS_m;
+/* __TF_HOP_END:30 */
+
+  /* __TF_HOP_BEGIN:32 */
+//pre-filter
+VS_t_5 =
+        SELECT t 
+        FROM Tag:t 
+        WHERE t.@countWindow1 == 0 and t.@countWindow2 == 0;
+
+tmp =
+        SELECT t
+        FROM VS_t_5:t -(HAS_TYPE>:_e_2)- _:tc
+        WHERE t.@countWindow1 == 0 AND t.@countWindow2 == 0 AND tc.name == tagClass
+        ACCUM @@result += RESULT(t.name, 0,0,0);
+/* __TF_HOP_END:36 */
+
+  PRINT @@result as result;
+}
