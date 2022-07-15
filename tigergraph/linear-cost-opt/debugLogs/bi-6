@@ -1,0 +1,156 @@
+D@20220715 23:08:36.312 tigergraph|127.0.0.1:50144|00000004689 (Util.java:1978) The original query is: 
+CREATE OR REPLACE DISTRIBUTED QUERY bi6(STRING tag) SYNTAX _v2 {
+  TYPEDEF TUPLE <UINT personId, UINT authorityScore> RESULT;
+  HeapAccum<RESULT>(100, authorityScore DESC, personId ASC) @@result;
+  SumAccum<UINT> @authorityScore;
+  MapAccum<VERTEX<Person>, MinAccum<UINT>> @pScore;
+  //propagate this down, to two places? Will this be handled by the optimizer?
+  /*message1 = SELECT m FROM Tag:t -(<HAS_TAG)- (Comment|Post):m WHERE t.name == tag;*/
+  //using a mapaccum can i propagate this down too?? CHECK
+  tmp = SELECT m FROM Tag:t -(<HAS_TAG)- (Comment|Post):m -(<LIKES)- Person:p2
+    WHERE t.name == tag
+    ACCUM m.@pScore += (p2->p2.popularityScore);
+    
+  person1 =
+    SELECT p1
+    FROM Tag:t -(<HAS_TAG)- (Comment|Post):m -(HAS_CREATOR>)- Person:p1
+    WHERE t.name == tag
+    ACCUM p1.@pScore += m.@pScore
+    POST-ACCUM 
+      FOREACH (p,score) IN p1.@pScore DO
+        p1.@authorityScore += score
+      END,
+      @@result += RESULT(p1.id, p1.@authorityScore), p1.@pScore.clear();
+  PRINT @@result as result;
+}
+----------------------------------
+I@20220715 23:08:36.312 tigergraph|127.0.0.1:50144|00000004689 (CatalogManager.java:811) getCatalog: ldbc_snb
+D@20220715 23:08:36.312 tigergraph|127.0.0.1:50144|00000004689 (Util.java:1978) After cost-optimization: 
+CREATE OR REPLACE DISTRIBUTED QUERY bi6(STRING tag) SYNTAX _v2 {
+  TYPEDEF TUPLE <UINT personId, UINT authorityScore> RESULT;
+/* __TF_HOP_BEGIN:0 */
+GroupByAccum<vertex<Tag> t__, SumAccum<int> mult> @propagAcc_0_to_1;
+        GroupByAccum<vertex m__, SumAccum<int> mult> @propagAcc_1_to_2;
+        GroupByAccum<vertex m__, vertex<Person> p2__, uint p2__popularityScore, SumAccum<int> mult> @matches_at_0;
+        GroupByAccum<vertex<Person> p2__, uint p2__popularityScore, SumAccum<int> mult> @matches_at_1;
+        SetAccum<vertex<Person>> @@VSAcc_p2;
+        SetAccum<vertex<Tag>> @@VSAcc_t;
+        SetAccum<vertex> @@VSAcc_m;
+/* __TF_HOP_END:0 */
+  HeapAccum<RESULT>(100, authorityScore DESC, personId ASC) @@result;
+  SumAccum<UINT> @authorityScore;
+  MapAccum<VERTEX<Person>, MinAccum<UINT>> @pScore;
+  //propagate this down, to two places? Will this be handled by the optimizer?
+  /*message1 = SELECT m FROM Tag:t -(<HAS_TAG)- (Comment|Post):m WHERE t.name == tag;*/
+  //using a mapaccum can i propagate this down too?? CHECK
+  /* __TF_HOP_BEGIN:9 */
+
+
+
+// traverse t --> m
+//pre-filter
+VS_t_1 =
+        SELECT t 
+        FROM Tag:t 
+        WHERE t.name == tag;
+
+VS_m =
+        SELECT m
+        FROM VS_t_1:t -(<HAS_TAG:_e)- (Post|Comment):m
+        WHERE  t.name == tag
+        ACCUM  m.@propagAcc_0_to_1 += (t -> 1);
+
+
+// traverse m --> p2
+VS_p2 = 
+        SELECT p2
+        FROM   VS_m:m  -( <LIKES :_e_1 )- Person:p2
+        ACCUM  p2.@propagAcc_1_to_2 += (m -> 1);
+
+
+// jump back p2 --> m
+VS_p2 = 
+        SELECT p2
+        FROM   VS_p2:p2
+        ACCUM  foreach (m, m_0) in p2.@propagAcc_1_to_2 do
+                 m.@matches_at_1 += (p2, p2.popularityScore -> m_0),
+                 @@VSAcc_m += m
+               end
+        POST-ACCUM p2.@propagAcc_1_to_2.clear();
+
+// Reset propagation accums of vertices to be filtered away.
+VS_m_filtered(Comment|Post) = {@@VSAcc_m};
+VS_m_filtered = VS_m_filtered minus VS_m;
+VS_m_filtered = SELECT m FROM VS_m_filtered:m POST-ACCUM m.@matches_at_1.clear(), m.@propagAcc_0_to_1.clear();
+// Filter VS_m.
+VS_m(Comment|Post) = {@@VSAcc_m}; @@VSAcc_m.clear();
+
+
+// jump back m --> t
+VS_m = 
+        SELECT m
+        FROM   VS_m:m
+        ACCUM  foreach (t, m_1) in m.@propagAcc_0_to_1 do
+                 foreach (p2__, p2__popularityScore, m_2) in m.@matches_at_1 do
+                   t.@matches_at_0 += (m, p2__, p2__popularityScore -> m_1 * m_2)
+                 end,
+                 @@VSAcc_t += t
+               end
+        POST-ACCUM m.@propagAcc_0_to_1.clear(),
+                   m.@matches_at_1.clear();
+// Filter VS_t.
+VS_t(Tag) = {@@VSAcc_t}; @@VSAcc_t.clear();
+
+
+
+// USER ACCUM CLAUSE
+VS_t = 
+        SELECT t
+        FROM   VS_t:t
+        ACCUM  foreach (m__, p2__, p2__popularityScore, mult_3) in t.@matches_at_0 do
+               
+                      IF (p2__.type == "Person") THEN
+                         
+                      @@VSAcc_m += m__,
+                       m__.@pScore += (p2__->p2__popularityScore)
+                      END
+               end
+        POST-ACCUM t.@matches_at_0.clear();
+VS_m(Comment|Post) = {@@VSAcc_m}; @@VSAcc_m.clear();
+
+tmp  = VS_m;
+/* __TF_HOP_END:11 */
+    
+  /* __TF_HOP_BEGIN:13 */
+// multiplicity propagation accum(s)
+SumAccum<int> @propagAcc_1_3;
+
+//pre-filter
+VS_t_3 =
+        SELECT t 
+        FROM Tag:t 
+        WHERE t.name == tag;
+
+//traverse
+VS_m_5 =
+        SELECT m
+        FROM VS_t_3:t -(<HAS_TAG:_e_2)- (Post|Comment):m
+        ACCUM m.@propagAcc_1_3 += 1;
+
+//post-processing: last hop
+person1 = 
+        SELECT p1 
+        FROM VS_m_5:m -(HAS_CREATOR>:_e_3)- _:p1 
+        ACCUM 
+    
+ foreach k in range[1, m.@propagAcc_1_3] do p1.@pScore += m.@pScore end
+ 
+        POST-ACCUM 
+      FOREACH (p,score) IN p1.@pScore DO
+        p1.@authorityScore += score
+      END,
+      @@result += RESULT(p1.id, p1.@authorityScore), p1.@pScore.clear();
+
+/* __TF_HOP_END:22 */
+  PRINT @@result as result;
+}

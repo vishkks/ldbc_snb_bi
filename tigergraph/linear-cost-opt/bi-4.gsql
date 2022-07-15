@@ -12,14 +12,13 @@ CREATE OR REPLACE DISTRIBUTED QUERY bi4 (DATETIME date) SYNTAX _v2 {
     LIMIT 100;
 
   //propogate p.inforum to the "tmp" query
-  P = SELECT p FROM popularForums -(HAS_MEMBER>)- Person:p ACCUM p.@inForum += true;
+  /*P = SELECT p FROM popularForums -(HAS_MEMBER>)- Person:p ACCUM p.@inForum += true;*/
   /*M = SELECT m FROM popularForums -(<ROOT_FORUM)- (Comment|Post):m;*/
-  tmp = SELECT p FROM popularForums - (<ROOT_FORUM)- (Comment|Post):m - (HAS_CREATOR>)- Person:p
-    WHERE p.@inForum 
+  tmp = SELECT p FROM Person:p - (<HAS_MEMBER) - popularForums - (<ROOT_FORUM)- (Comment|Post):m - (HAS_CREATOR>)- Person:p
     ACCUM p.@messageCount += 1
     ORDER BY p.@messageCount DESC, p.id ASC 
     LIMIT 100;
-  tmp = SELECT p FROM P:p
+  tmp = SELECT p FROM popularForums -(HAS_MEMBER>)- Person:p
     ACCUM @@result += RESULT(p.id, p.firstName, p.lastName, ms_to_string(p.creationDate), p.@messageCount);
 
   PRINT @@result as result;

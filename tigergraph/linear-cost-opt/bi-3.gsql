@@ -6,13 +6,13 @@ CREATE OR REPLACE DISTRIBUTED QUERY bi3(STRING tagClass, STRING country) SYNTAX 
   OrAccum <BOOL> @selected;
   
   //remove the two accums here and propogate it to the last query here so that the linear cost opt will be able to break it
-  
+  /*
   forums =
     SELECT f
     FROM Country:cn -(<IS_PART_OF.<IS_LOCATED_IN)- Person:p -(<HAS_MODERATOR)- Forum:f
     WHERE cn.name == country
     ACCUM f.@personId = p.id, f.@selected += true;
-    
+    */
     /*
   messages =
     SELECT m
@@ -21,10 +21,11 @@ CREATE OR REPLACE DISTRIBUTED QUERY bi3(STRING tagClass, STRING country) SYNTAX 
     */
   tmp =
     SELECT f
-    FROM  TagClass:t -(<HAS_TYPE.<HAS_TAG)- (Comment|Post):m -(ROOT_FORUM>)- Forum:f
-    WHERE t.name == tagClass
-    PER(m,f) // Since each message finally replies to one Post, this PER does not change results but improve performance.
-    ACCUM f.@messageCount += 1
+    FROM  TagClass:t -(<HAS_TYPE.<HAS_TAG)- (Comment|Post):m -(ROOT_FORUM>)- Forum:f - (HAS_MODERATOR>) - Person:p - (IS_LOCATED_IN>.IS_PART_OF>) - Country:cn
+    WHERE cn.name == country and
+    t.name == tagClass
+    PER(m,f,p) // Since each message finally replies to one Post, this PER does not change results but improve performance.
+    ACCUM f.@messageCount += 1, f.@personId = p.id
     POST-ACCUM @@result += RESULT(f.id, f.title, ms_to_string(f.creationDate), f.@personId, f.@messageCount);
 
   PRINT @@result as result;

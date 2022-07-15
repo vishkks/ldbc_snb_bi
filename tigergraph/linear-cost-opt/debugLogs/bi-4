@@ -1,4 +1,3 @@
-D@20220713 08:07:22.107 tigergraph|127.0.0.1:56416|00000000826 (Util.java:1978) The original query is: 
 CREATE OR REPLACE DISTRIBUTED QUERY bi4 (DATETIME date) SYNTAX _v2 {
   TYPEDEF TUPLE <UINT personId, STRING personFirstName, STRING personLastName,
     STRING personCreationDate, UINT messageCount> RESULT;
@@ -13,23 +12,30 @@ CREATE OR REPLACE DISTRIBUTED QUERY bi4 (DATETIME date) SYNTAX _v2 {
     LIMIT 100;
 
   //propogate p.inforum to the "tmp" query
-  P = SELECT p FROM popularForums -(HAS_MEMBER>)- Person:p ACCUM p.@inForum += true;
+  /*P = SELECT p FROM popularForums -(HAS_MEMBER>)- Person:p ACCUM p.@inForum += true;*/
   /*M = SELECT m FROM popularForums -(<ROOT_FORUM)- (Comment|Post):m;*/
-  tmp = SELECT p FROM popularForums - (<ROOT_FORUM)- (Comment|Post):m - (HAS_CREATOR>)- Person:p
-    WHERE p.@inForum 
+  tmp = SELECT p FROM Person:p - (<HAS_MEMBER) - popularForums - (<ROOT_FORUM)- (Comment|Post):m - (HAS_CREATOR>)- Person:p
     ACCUM p.@messageCount += 1
     ORDER BY p.@messageCount DESC, p.id ASC 
     LIMIT 100;
-  tmp = SELECT p FROM P:p
+  tmp = SELECT p FROM popularForums -(HAS_MEMBER>)- Person:p
     ACCUM @@result += RESULT(p.id, p.firstName, p.lastName, ms_to_string(p.creationDate), p.@messageCount);
 
   PRINT @@result as result;
 }
 ----------------------------------
-D@20220713 08:07:22.107 tigergraph|127.0.0.1:56416|00000000826 (Util.java:1978) After cost-optimization: 
+D@20220715 22:57:16.677 tigergraph|127.0.0.1:40578|00000004670 (Util.java:1978) After cost-optimization: 
 CREATE OR REPLACE DISTRIBUTED QUERY bi4 (DATETIME date) SYNTAX _v2 {
   TYPEDEF TUPLE <UINT personId, STRING personFirstName, STRING personLastName,
     STRING personCreationDate, UINT messageCount> RESULT;
+/* __TF_HOP_BEGIN:0 */
+GroupByAccum<vertex x0__, SumAccum<int> mult> @propagAcc_0_to_1;
+        GroupByAccum<vertex<Person> p__, SumAccum<int> mult> @propagAcc_1_to_2;
+        GroupByAccum<vertex<Person> p__, SumAccum<int> mult> @matches_at_0;
+        GroupByAccum<vertex x0__, SumAccum<int> mult> @matches_at_1;
+        SetAccum<vertex<Person>> @@VSAcc_p;
+        SetAccum<vertex> @@VSAcc_x0;
+/* __TF_HOP_END:0 */
   HeapAccum<RESULT>(100, messageCount DESC, personId ASC) @@result;
   OrAccum<BOOL> @inForum, @selected;
   SumAccum<UINT> @messageCount;
@@ -41,19 +47,96 @@ CREATE OR REPLACE DISTRIBUTED QUERY bi4 (DATETIME date) SYNTAX _v2 {
     LIMIT 100;
 
   //propogate p.inforum to the "tmp" query
-  /* __TF_HOP_BEGIN:15 */
-P = SELECT p FROM popularForums :_s  -( HAS_MEMBER> :_e )- Person:p ACCUM p.@inForum += true;
-/* __TF_HOP_END:15 */
+  /*P = SELECT p FROM popularForums -(HAS_MEMBER>)- Person:p ACCUM p.@inForum += true;*/
   /*M = SELECT m FROM popularForums -(<ROOT_FORUM)- (Comment|Post):m;*/
   /* __TF_HOP_BEGIN:17 */
-tmp = SELECT p FROM popularForums :_s_1  - ( <ROOT_FORUM :_e_1 )- (Comment|Post):m - ( HAS_CREATOR> :_e_2 )- Person:p
-    WHERE p.@inForum 
-    ACCUM p.@messageCount += 1
-    ORDER BY p.@messageCount DESC, p.id ASC 
-    LIMIT 100;
-/* __TF_HOP_END:21 */
-  tmp = SELECT p FROM P:p
+
+
+VS_x0 = popularForums;
+
+
+// traverse x0 --> p
+VS_p = 
+        SELECT p
+        FROM   VS_x0:x0  -( <ROOT_FORUM :_e )- (Comment|Post):m -( HAS_CREATOR> :_e_1 )- Person:p
+        ACCUM  p.@propagAcc_0_to_1 += (x0 -> 1);
+
+
+// traverse p --> x0
+VS_x0_tmp = 
+        SELECT x0
+        FROM   VS_p:p  -( <HAS_MEMBER :_e_2 )- _:x0
+        ACCUM  x0.@propagAcc_1_to_2 += (p -> 1);
+
+// Reset propagation accums of vertices to be filtered away.
+VS_x0_filtered = VS_x0_tmp minus VS_x0;
+VS_x0_filtered = SELECT x0 FROM VS_x0_filtered:x0 POST-ACCUM x0.@propagAcc_1_to_2.clear();
+// Intersect with VS_x0.
+VS_x0 = VS_x0_tmp intersect VS_x0;
+
+
+// jump back x0 --> p
+VS_x0 = 
+        SELECT x0
+        FROM   VS_x0:x0
+        ACCUM  foreach (p, m_0) in x0.@propagAcc_1_to_2 do
+                 p.@matches_at_1 += (x0 -> m_0),
+                 @@VSAcc_p += p
+               end
+        POST-ACCUM x0.@propagAcc_1_to_2.clear();
+
+// Reset propagation accums of vertices to be filtered away.
+VS_p_filtered(Person) = {@@VSAcc_p};
+VS_p_filtered = VS_p_filtered minus VS_p;
+VS_p_filtered = SELECT p FROM VS_p_filtered:p POST-ACCUM p.@matches_at_1.clear(), p.@propagAcc_0_to_1.clear();
+// Filter VS_p.
+VS_p(Person) = {@@VSAcc_p}; @@VSAcc_p.clear();
+
+
+// jump back p --> x0
+VS_p = 
+        SELECT p
+        FROM   VS_p:p
+        ACCUM  foreach (x0, m_1) in p.@propagAcc_0_to_1 do               
+                 bool ok = false,
+                 foreach (x0___3, m_2) in p.@matches_at_1 do
+                   if x0 == x0___3 then
+                      x0.@matches_at_0 += (p -> m_1 * m_2),
+                      ok = true
+                   end
+                 end,
+                 if ok then @@VSAcc_x0 += x0 end
+               end
+        POST-ACCUM p.@propagAcc_0_to_1.clear(),
+                   p.@matches_at_1.clear();
+// Filter VS_x0.
+VS_x0(Forum) = {@@VSAcc_x0}; @@VSAcc_x0.clear();
+
+
+
+// USER ACCUM CLAUSE
+VS_x0 = 
+        SELECT x0
+        FROM   VS_x0:x0
+        ACCUM  foreach (p__, mult_4) in x0.@matches_at_0 do
+               
+                      @@VSAcc_p += p__,
+                 
+          p__.@messageCount += mult_4 * (1) 
+               end
+        POST-ACCUM x0.@matches_at_0.clear();
+VS_p(Person) = {@@VSAcc_p}; @@VSAcc_p.clear();
+
+tmp  = 
+        SELECT p
+        FROM   VS_p:p
+        ORDER BY p.@messageCount DESC, p.id ASC
+        LIMIT 100;
+/* __TF_HOP_END:20 */
+  /* __TF_HOP_BEGIN:21 */
+tmp = SELECT p FROM popularForums :_s  -( HAS_MEMBER> :_e_3 )- Person:p
     ACCUM @@result += RESULT(p.id, p.firstName, p.lastName, ms_to_string(p.creationDate), p.@messageCount);
+/* __TF_HOP_END:22 */
 
   PRINT @@result as result;
 }

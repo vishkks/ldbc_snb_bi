@@ -1,4 +1,4 @@
-D@20220713 07:55:09.870 tigergraph|127.0.0.1:43974|00000000808 (Util.java:1978) The original query is: 
+D@20220715 19:45:11.635 tigergraph|127.0.0.1:51112|00000004459 (Util.java:1978) The original query is: 
 CREATE OR REPLACE DISTRIBUTED QUERY bi3(STRING tagClass, STRING country) SYNTAX _v2 {
   TYPEDEF TUPLE <UINT forumId, STRING forumTitle, STRING forumCreationDate, UINT personId, UINT messageCount> RESULT;
   HeapAccum<RESULT>(20, messageCount DESC, forumId ASC) @@result;
@@ -7,13 +7,13 @@ CREATE OR REPLACE DISTRIBUTED QUERY bi3(STRING tagClass, STRING country) SYNTAX 
   OrAccum <BOOL> @selected;
   
   //remove the two accums here and propogate it to the last query here so that the linear cost opt will be able to break it
-  
+  /*
   forums =
     SELECT f
     FROM Country:cn -(<IS_PART_OF.<IS_LOCATED_IN)- Person:p -(<HAS_MODERATOR)- Forum:f
     WHERE cn.name == country
     ACCUM f.@personId = p.id, f.@selected += true;
-    
+    */
     /*
   messages =
     SELECT m
@@ -22,60 +22,53 @@ CREATE OR REPLACE DISTRIBUTED QUERY bi3(STRING tagClass, STRING country) SYNTAX 
     */
   tmp =
     SELECT f
-    FROM  TagClass:t -(<HAS_TYPE.<HAS_TAG)- (Comment|Post):m -(ROOT_FORUM>)- Forum:f
-    WHERE t.name == tagClass
-    PER(m,f) // Since each message finally replies to one Post, this PER does not change results but improve performance.
-    ACCUM f.@messageCount += 1
+    FROM  TagClass:t -(<HAS_TYPE.<HAS_TAG)- (Comment|Post):m -(ROOT_FORUM>)- Forum:f - (HAS_MODERATOR>) - Person:p - (IS_LOCATED_IN>.IS_PART_OF>) - Country:cn
+    WHERE cn.name == country and
+    t.name == tagClass
+    PER(m,f,p) // Since each message finally replies to one Post, this PER does not change results but improve performance.
+    ACCUM f.@messageCount += 1, f.@personId = p.id
     POST-ACCUM @@result += RESULT(f.id, f.title, ms_to_string(f.creationDate), f.@personId, f.@messageCount);
 
   PRINT @@result as result;
 }
 ----------------------------------
-D@20220713 07:55:09.870 tigergraph|127.0.0.1:43974|00000000808 (Util.java:1978) After cost-optimization: 
+D@20220715 19:45:11.635 tigergraph|127.0.0.1:51112|00000004459 (Util.java:1978) After cost-optimization: 
 CREATE OR REPLACE DISTRIBUTED QUERY bi3(STRING tagClass, STRING country) SYNTAX _v2 {
   TYPEDEF TUPLE <UINT forumId, STRING forumTitle, STRING forumCreationDate, UINT personId, UINT messageCount> RESULT;
+/* __TF_HOP_BEGIN:0 */
+typedef tuple<vertex<Forum> f__, vertex m__, vertex<Person> p__, uint p__id> matches_at_0__TupTy;
+        typedef tuple<vertex<Forum> f__, vertex<Person> p__, uint p__id> matches_at_1__TupTy;
+        typedef tuple<vertex<Person> p__, uint p__id> matches_at_2__TupTy;
 
 // global vertex set accum used for jumps
 SetAccum<VERTEX> @@JumpVS;
+        SetAccum<vertex<TagClass>> @propagAcc_0_to_1;
+        SetAccum<vertex> @propagAcc_1_to_2;
+        SetAccum<vertex<Forum>> @propagAcc_2_to_3;
+        SetAccum<vertex<Person>> @propagAcc_3_to_4;
+        SetAccum<matches_at_0__TupTy> @matches_at_0;
+        SetAccum<matches_at_1__TupTy> @matches_at_1;
+        SetAccum<matches_at_2__TupTy> @matches_at_2;
+        OrAccum @matches_at_3;
+        SetAccum<vertex<Person>> @@VSAcc_p;
+        SetAccum<vertex<TagClass>> @@VSAcc_t;
+        SetAccum<vertex<Forum>> @@VSAcc_f;
+        SetAccum<vertex<Country>> @@VSAcc_cn;
+        SetAccum<vertex> @@VSAcc_m;
+/* __TF_HOP_END:0 */
   HeapAccum<RESULT>(20, messageCount DESC, forumId ASC) @@result;
   SumAccum<UINT> @messageCount;
   MinAccum<UINT> @personId;
   OrAccum <BOOL> @selected;
   
   //remove the two accums here and propogate it to the last query here so that the linear cost opt will be able to break it
-  
-  /* __TF_HOP_BEGIN:10 */
-// src id propagation accum(s)
-SetAccum<VERTEX> @propagAcc_0;
-
-//traverse
-VS_cn =
-        SELECT cn
-        FROM Person:p -(IS_LOCATED_IN>:_e_1)- _:_v -(IS_PART_OF>:_e)- _:cn
-        WHERE cn.name == country
-        ACCUM cn.@propagAcc_0 += p;
-
-//jump
-VS_cn = 
-        SELECT cn 
-        FROM VS_cn:cn 
-        ACCUM 
-                foreach p in cn.@propagAcc_0 do
-                        @@JumpVS += p 
-                end 
-        POST-ACCUM cn.@propagAcc_0.clear();
-
-VS_p = {@@JumpVS};
-@@JumpVS.clear();
-
-//post-processing: last hop
-forums = 
-        SELECT f 
-        FROM VS_p:p -(<HAS_MODERATOR:_e_2)- _:f 
-        ACCUM  f.@personId = p.id, f.@selected += true;
-
-/* __TF_HOP_END:14 */
-    
+  /*
+  forums =
+    SELECT f
+    FROM Country:cn -(<IS_PART_OF.<IS_LOCATED_IN)- Person:p -(<HAS_MODERATOR)- Forum:f
+    WHERE cn.name == country
+    ACCUM f.@personId = p.id, f.@selected += true;
+    */
     /*
   messages =
     SELECT m
@@ -83,14 +76,201 @@ forums =
     WHERE t.name == tagClass;
     */
   /* __TF_HOP_BEGIN:22 */
-tmp =
+
+
+
+// traverse t --> m
+// src id propagation accum(s)
+SetAccum<VERTEX> @propagAcc_2;
+
+//pre-filter
+VS_t_1 =
+        SELECT t 
+        FROM TagClass:t 
+        WHERE t.name == tagClass;
+
+//traverse
+VS_m_1 =
+        SELECT m
+        FROM VS_t_1:t -(<HAS_TYPE:_e)- _:_v -(<HAS_TAG:_e_1)- (Post|Comment):m
+        ACCUM m.@propagAcc_2 += t;
+
+//post-processing
+VS_m = 
+        SELECT m 
+        FROM VS_m_1:m 
+        ACCUM 
+                foreach t in m.@propagAcc_2 do
+                          m.@propagAcc_0_to_1 += t 
+                end;
+
+
+
+// traverse m --> f
+VS_f = 
         SELECT f
-        FROM TagClass:t-( <HAS_TYPE :_e_3 )-  :_v_1  -( <HAS_TAG :_e_4 )-(Comment|Post):m-( ROOT_FORUM> :_e_5 )-Forum:f
-        WHERE t.name == tagClass
-        PER LASTHOP-SRC TGT
-        ACCUM f.@messageCount += 1
+        FROM   VS_m:m  -( ROOT_FORUM> :_e_2 )- Forum:f
+        ACCUM  f.@propagAcc_1_to_2 += m;
+
+
+// traverse f --> p
+VS_p = 
+        SELECT p
+        FROM   VS_f:f  -( HAS_MODERATOR> :_e_3 )- Person:p
+        ACCUM  p.@propagAcc_2_to_3 += f;
+
+
+// traverse p --> cn
+// src id propagation accum(s)
+SetAccum<VERTEX> @propagAcc_2_1, @propagAcc_0_5;
+
+//pre-filter
+VS_cn_1 =
+        SELECT cn 
+        FROM Country:cn 
+        WHERE cn.name == country;
+
+// mark vertices in vsets
+OrAccum @in_VS_p;
+VS_p = SELECT v FROM VS_p :v ACCUM v.@in_VS_p = true;
+
+VS_p_3 = 
+        SELECT p
+                                FROM  VS_cn_1:cn -(<IS_PART_OF:_e_5)- _:_v_1 -(<IS_LOCATED_IN:_e_4)-_:p
+                                WHERE p.@in_VS_p
+
+        ACCUM p.@propagAcc_0_5 += cn;
+
+//jump
+VS_p_3 = 
+        SELECT p 
+        FROM VS_p_3:p 
+        ACCUM 
+                foreach cn in p.@propagAcc_0_5 do
+                        cn.@propagAcc_2_1 += p
+                        ,@@JumpVS += cn 
+                end 
+        POST-ACCUM p.@propagAcc_0_5.clear();
+
+VS_cn_1 = {@@JumpVS};
+@@JumpVS.clear();
+
+//post-processing
+VS_cn = 
+        SELECT cn 
+        FROM VS_cn_1:cn 
+        ACCUM 
+                foreach p in cn.@propagAcc_2_1 do
+                          cn.@propagAcc_3_to_4 += p 
+                end;
+
+
+
+// jump back cn --> p
+VS_cn = 
+        SELECT cn
+        FROM   VS_cn:cn
+        ACCUM  foreach p in cn.@propagAcc_3_to_4 do
+                 p.@matches_at_3 += true,
+                 @@VSAcc_p += p
+               end
+        POST-ACCUM cn.@propagAcc_3_to_4.clear();
+
+// Reset propagation accums of vertices to be filtered away.
+VS_p_filtered(Person) = {@@VSAcc_p};
+VS_p_filtered = VS_p_filtered minus VS_p;
+VS_p_filtered = SELECT p FROM VS_p_filtered:p POST-ACCUM p.@propagAcc_2_to_3.clear();
+// Filter VS_p.
+VS_p(Person) = {@@VSAcc_p}; @@VSAcc_p.clear();
+
+
+// jump back p --> f
+VS_p = 
+        SELECT p
+        FROM   VS_p:p
+        ACCUM  foreach f in p.@propagAcc_2_to_3 do
+                   if p.@matches_at_3 then
+                      f.@matches_at_2 += matches_at_2__TupTy(p, p.id)
+                   end,
+                 @@VSAcc_f += f
+               end
+        POST-ACCUM p.@propagAcc_2_to_3.clear();
+
+// Reset propagation accums of vertices to be filtered away.
+VS_f_filtered(Forum) = {@@VSAcc_f};
+VS_f_filtered = VS_f_filtered minus VS_f;
+VS_f_filtered = SELECT f FROM VS_f_filtered:f POST-ACCUM f.@matches_at_2.clear(), f.@propagAcc_1_to_2.clear();
+// Filter VS_f.
+VS_f(Forum) = {@@VSAcc_f}; @@VSAcc_f.clear();
+
+
+// jump back f --> m
+VS_f = 
+        SELECT f
+        FROM   VS_f:f
+        ACCUM  foreach m in f.@propagAcc_1_to_2 do
+                 foreach t_0 in f.@matches_at_2 do
+                   vertex<Person> p__ = t_0.p__,
+                   uint p__id = t_0.p__id,
+                   m.@matches_at_1 += matches_at_1__TupTy(f, p__, p__id)
+                 end,
+                 @@VSAcc_m += m
+               end
+        POST-ACCUM f.@propagAcc_1_to_2.clear(),
+                   f.@matches_at_2.clear();
+
+// Reset propagation accums of vertices to be filtered away.
+VS_m_filtered(Comment|Post) = {@@VSAcc_m};
+VS_m_filtered = VS_m_filtered minus VS_m;
+VS_m_filtered = SELECT m FROM VS_m_filtered:m POST-ACCUM m.@matches_at_1.clear(), m.@propagAcc_0_to_1.clear();
+// Filter VS_m.
+VS_m(Comment|Post) = {@@VSAcc_m}; @@VSAcc_m.clear();
+
+
+// jump back m --> t
+VS_m = 
+        SELECT m
+        FROM   VS_m:m
+        ACCUM  foreach t in m.@propagAcc_0_to_1 do
+                 foreach t_1 in m.@matches_at_1 do
+                   vertex<Forum> f__ = t_1.f__,
+                   vertex<Person> p__ = t_1.p__,
+                   uint p__id = t_1.p__id,
+                   t.@matches_at_0 += matches_at_0__TupTy(f__, m, p__, p__id)
+                 end,
+                 @@VSAcc_t += t
+               end
+        POST-ACCUM m.@propagAcc_0_to_1.clear(),
+                   m.@matches_at_1.clear();
+// Filter VS_t.
+VS_t(TagClass) = {@@VSAcc_t}; @@VSAcc_t.clear();
+
+
+
+// USER ACCUM CLAUSE
+VS_t = 
+        SELECT t
+        FROM   VS_t:t
+        ACCUM  foreach t_3 in t.@matches_at_0 do
+                   vertex<Forum> f__ = t_3.f__,
+                   vertex m__ = t_3.m__,
+                   vertex<Person> p__ = t_3.p__,
+                   uint p__id = t_3.p__id,
+               
+                      @@VSAcc_f += f__,
+                       f__.@messageCount += 1, f__.@personId = p__id
+               end
+        POST-ACCUM t.@matches_at_0.clear();
+VS_f(Forum) = {@@VSAcc_f}; @@VSAcc_f.clear();
+
+// USER POST-ACCUM CLAUSE
+VS_f = 
+        SELECT f
+        FROM   VS_f:f
         POST-ACCUM @@result += RESULT(f.id, f.title, ms_to_string(f.creationDate), f.@personId, f.@messageCount);
-/* __TF_HOP_END:28 */
+
+tmp  = VS_f;
+/* __TF_HOP_END:29 */
 
   PRINT @@result as result;
 }
