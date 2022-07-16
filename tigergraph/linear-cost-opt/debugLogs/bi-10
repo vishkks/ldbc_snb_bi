@@ -1,0 +1,223 @@
+D@20220715 23:48:59.593 tigergraph|127.0.0.1:44058|00000004747 (Util.java:1978) The original query is: 
+CREATE OR REPLACE DISTRIBUTED QUERY bi10(VERTEX<Person> personId, STRING country, STRING tagClass) SYNTAX _v2 {
+  TYPEDEF TUPLE <UINT personId, STRING tagName, UINT messageCount> RESULT;
+  OrAccum @visited, @selected;
+  SetAccum<VERTEX<Tag>> @tags;
+  MapAccum<VERTEX<Tag>, SumAccum<UINT>> @messageCount;
+  HeapAccum<RESULT> (100, messageCount DESC, tagName ASC, personId ASC) @@result;
+  candidates = SELECT p FROM Country:cn -(<IS_PART_OF.<IS_LOCATED_IN)- Person:p
+    WHERE cn.name == country;
+
+  S = {personId};
+  UINT pathLength = 0;
+  S = SELECT s FROM S:s ACCUM s.@visited = TRUE;
+  WHILE pathLength < 3 DO
+    S =
+      SELECT t
+      FROM S:s -(KNOWS)- Person:t
+      WHERE NOT t.@visited
+      POST-ACCUM t.@visited = TRUE;
+    pathLength += 1;
+  END;
+  # Here, S is the Person with shortest length of 3
+  persons = SELECT t
+    FROM S:s -(KNOWS)- Person:t
+    WHERE NOT t.@visited;
+  persons = (persons UNION S) INTERSECT candidates;
+
+  //propagate it down
+  /*messages = SELECT m
+    FROM persons:p -(<HAS_CREATOR)- (Comment|Post):m
+    ACCUM m.@selected += TRUE;
+  */
+
+  messages = SELECT m
+    FROM TagClass:tc -(<HAS_TYPE)- Tag:t -(<HAS_TAG)- (Comment|Post):m -(HAS_CREATOR>)- persons:p
+    WHERE tc.name == tagClass;
+
+  messages = SELECT m
+    FROM messages:m -(HAS_TAG>)- Tag:t
+    ACCUM m.@tags += t;
+
+  persons = SELECT p
+    FROM messages:m -(HAS_CREATOR>)- Person:p
+    ACCUM
+      FOREACH t IN m.@tags DO
+        p.@messageCount += (t -> 1)
+      END
+    POST-ACCUM
+      FOREACH (t,cnt) IN p.@messageCount DO
+        @@result += RESULT(p.id, t.name, cnt)
+      END;
+  PRINT @@result as result;
+}
+----------------------------------
+D@20220715 23:48:59.593 tigergraph|127.0.0.1:44058|00000004747 (Util.java:1978) After cost-optimization: 
+CREATE OR REPLACE DISTRIBUTED QUERY bi10(VERTEX<Person> personId, STRING country, STRING tagClass) SYNTAX _v2 {
+  TYPEDEF TUPLE <UINT personId, STRING tagName, UINT messageCount> RESULT;
+/* __TF_HOP_BEGIN:0 */
+SetAccum<vertex<TagClass>> @propagAcc_0_to_1;
+	SetAccum<vertex> @propagAcc_1_to_2;
+	SetAccum<vertex> @matches_at_0;
+	OrAccum @matches_at_1;
+	SetAccum<vertex> @@VSAcc_p;
+	SetAccum<vertex> @@VSAcc_m;
+	SetAccum<vertex<TagClass>> @@VSAcc_tc;
+/* __TF_HOP_END:0 */
+  OrAccum @visited, @selected;
+  SetAccum<VERTEX<Tag>> @tags;
+  MapAccum<VERTEX<Tag>, SumAccum<UINT>> @messageCount;
+  HeapAccum<RESULT> (100, messageCount DESC, tagName ASC, personId ASC) @@result;
+  /* __TF_HOP_BEGIN:7 */
+//pre-filter
+VS_cn =
+	SELECT cn 
+	FROM Country:cn 
+	WHERE cn.name == country;
+
+//traverse
+VS_p_1 =
+	SELECT p
+	FROM VS_cn:cn -(<IS_PART_OF:_e)- _:_v -(<IS_LOCATED_IN:_e_1)- Person:p;
+
+//post-processing
+candidates = VS_p_1;
+/* __TF_HOP_END:8 */
+
+  S = {personId};
+  UINT pathLength = 0;
+  S = SELECT s FROM S:s ACCUM s.@visited = TRUE;
+  WHILE pathLength < 3 DO
+    /* __TF_HOP_BEGIN:14 */
+S =
+      SELECT t
+      FROM S:s -( KNOWS :_e_2 )- Person:t
+      WHERE NOT t.@visited
+      POST-ACCUM t.@visited = TRUE;
+/* __TF_HOP_END:18 */
+    pathLength += 1;
+  END;
+  # Here, S is the Person with shortest length of 3
+  /* __TF_HOP_BEGIN:22 */
+persons = SELECT t
+    FROM S:s -( KNOWS :_e_3 )- Person:t
+    WHERE NOT t.@visited;
+/* __TF_HOP_END:24 */
+  persons = (persons UNION S) INTERSECT candidates;
+
+  //propagate it down
+  /*messages = SELECT m
+    FROM persons:p -(<HAS_CREATOR)- (Comment|Post):m
+    ACCUM m.@selected += TRUE;
+  */
+
+  /* __TF_HOP_BEGIN:33 */
+
+
+
+// traverse tc --> m
+// src id propagation accum(s)
+SetAccum<VERTEX> @propagAcc_2_1;
+
+//pre-filter
+VS_tc_1 =
+	SELECT tc 
+	FROM TagClass:tc 
+	WHERE tc.name == tagClass;
+
+//traverse
+VS_m_1 =
+	SELECT m
+	FROM VS_tc_1:tc -(<HAS_TYPE:_e_4)- _:t -(<HAS_TAG:_e_5)- (Post|Comment):m
+	ACCUM m.@propagAcc_2_1 += tc;
+
+//post-processing
+VS_m = 
+	SELECT m 
+	FROM VS_m_1:m 
+	ACCUM 
+		foreach tc in m.@propagAcc_2_1 do
+			  m.@propagAcc_0_to_1 += tc 
+		end;
+
+
+
+// traverse m --> p
+VS_p = 
+	SELECT p
+	FROM   VS_m:m  -( HAS_CREATOR> :_e_6 )- _:p
+	ACCUM  p.@propagAcc_1_to_2 += m;
+
+VS_p = persons intersect VS_p;
+
+
+// jump back p --> m
+VS_p = 
+	SELECT p
+	FROM   VS_p:p
+	ACCUM  foreach m in p.@propagAcc_1_to_2 do
+	         m.@matches_at_1 += true,
+	         @@VSAcc_m += m
+	       end
+	POST-ACCUM p.@propagAcc_1_to_2.clear();
+
+// Reset propagation accums of vertices to be filtered away.
+VS_m_filtered(Comment|Post) = {@@VSAcc_m};
+VS_m_filtered = VS_m_filtered minus VS_m;
+VS_m_filtered = SELECT m FROM VS_m_filtered:m POST-ACCUM m.@propagAcc_0_to_1.clear();
+// Filter VS_m.
+VS_m(Comment|Post) = {@@VSAcc_m}; @@VSAcc_m.clear();
+
+
+// jump back m --> tc
+VS_m = 
+	SELECT m
+	FROM   VS_m:m
+	ACCUM  foreach tc in m.@propagAcc_0_to_1 do
+	           if m.@matches_at_1 then
+	              tc.@matches_at_0 += (m)
+	           end,
+	         @@VSAcc_tc += tc
+	       end
+	POST-ACCUM m.@propagAcc_0_to_1.clear();
+// Filter VS_tc.
+VS_tc(TagClass) = {@@VSAcc_tc}; @@VSAcc_tc.clear();
+
+
+
+// USER ACCUM CLAUSE
+VS_tc = 
+	SELECT tc
+	FROM   VS_tc:tc
+	ACCUM  foreach m__ in tc.@matches_at_0 do
+	       
+		      @@VSAcc_m += m__
+	         
+	       end
+	POST-ACCUM tc.@matches_at_0.clear();
+VS_m(Comment|Post) = {@@VSAcc_m}; @@VSAcc_m.clear();
+
+messages  = VS_m;
+/* __TF_HOP_END:35 */
+
+  /* __TF_HOP_BEGIN:37 */
+messages =
+	SELECT m
+	FROM messages:m -(HAS_TAG>:_e_7)- _:t
+	ACCUM m.@tags += t;
+/* __TF_HOP_END:39 */
+
+  /* __TF_HOP_BEGIN:41 */
+persons = SELECT p
+    FROM messages:m -( HAS_CREATOR> :_e_8 )- Person:p
+    ACCUM
+      FOREACH t IN m.@tags DO
+        p.@messageCount += (t -> 1)
+      END
+    POST-ACCUM
+      FOREACH (t,cnt) IN p.@messageCount DO
+        @@result += RESULT(p.id, t.name, cnt)
+      END;
+/* __TF_HOP_END:50 */
+  PRINT @@result as result;
+}

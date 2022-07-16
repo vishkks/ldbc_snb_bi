@@ -1,0 +1,98 @@
+D@20220715 23:37:57.892 tigergraph|127.0.0.1:35274|00000004730 (Util.java:1978) The original query is: 
+CREATE OR REPLACE DISTRIBUTED QUERY bi8(STRING tag, DATETIME startDate, DATETIME endDate) SYNTAX _v2 {
+  TYPEDEF TUPLE <UINT personId, UINT score, UINT friendsScore, UINT totalScore> RESULT;
+  HeapAccum<RESULT>(100, totalScore DESC, personId ASC) @@result;
+  SumAccum<UINT> @score;
+  SumAccum<UINT> @friendsScore;
+  INT startEpoch = datetime_to_epoch(startDate) * 1000;
+  INT endEpoch = datetime_to_epoch(endDate) * 1000;
+
+  //propagate it down
+  /*tagWithName = SELECT t FROM Tag:t WHERE t.name == tag;*/
+
+  personsWithInterest =
+    SELECT p
+    FROM Tag:t -(<HAS_INTEREST)- Person:p
+    WHERE t.name == tag
+    ACCUM p.@score += 100;
+
+  personsWithMessages =
+    SELECT p
+    FROM Tag:t -(<HAS_TAG)- (Comment|Post):m -(HAS_CREATOR>)- Person:p
+    WHERE t.name == tag AND
+    m.creationDate BETWEEN startEpoch AND endEpoch 
+    ACCUM p.@score += 1;
+
+  personsWithScore = personsWithInterest UNION personsWithMessages;
+  tmp = SELECT p FROM personsWithScore:p -(KNOWS)- Person:f 
+      ACCUM p.@friendsScore += f.@score;
+  personsWithScore = SELECT p FROM personsWithScore:p
+      ACCUM @@result += RESULT(p.id, p.@score, p.@friendsScore, p.@score + p.@friendsScore);
+
+  PRINT @@result as result;
+}
+----------------------------------
+D@20220715 23:37:57.892 tigergraph|127.0.0.1:35274|00000004730 (Util.java:1978) After cost-optimization: 
+CREATE OR REPLACE DISTRIBUTED QUERY bi8(STRING tag, DATETIME startDate, DATETIME endDate) SYNTAX _v2 {
+  TYPEDEF TUPLE <UINT personId, UINT score, UINT friendsScore, UINT totalScore> RESULT;
+  HeapAccum<RESULT>(100, totalScore DESC, personId ASC) @@result;
+  SumAccum<UINT> @score;
+  SumAccum<UINT> @friendsScore;
+  INT startEpoch = datetime_to_epoch(startDate) * 1000;
+  INT endEpoch = datetime_to_epoch(endDate) * 1000;
+
+  //propagate it down
+  /*tagWithName = SELECT t FROM Tag:t WHERE t.name == tag;*/
+
+  /* __TF_HOP_BEGIN:12 */
+//pre-filter
+VS_t =
+	SELECT t 
+	FROM Tag:t 
+	WHERE t.name == tag;
+
+personsWithInterest =
+	SELECT p
+	FROM VS_t:t -(<HAS_INTEREST:_e)- _:p
+	WHERE t.name == tag
+	ACCUM p.@score += 100;
+/* __TF_HOP_END:16 */
+
+  /* __TF_HOP_BEGIN:18 */
+// multiplicity propagation accum(s)
+SumAccum<int> @propagAcc_2;
+
+//pre-filter
+VS_t_1 =
+	SELECT t 
+	FROM Tag:t 
+	WHERE t.name == tag;
+
+//traverse
+VS_p_1 =
+	SELECT p
+	FROM VS_t_1:t -(<HAS_TAG:_e_1)- (Post|Comment):m -(HAS_CREATOR>:_e_2)- _:p
+	WHERE m.creationDate BETWEEN startEpoch AND endEpoch
+	ACCUM p.@propagAcc_2 += 1;
+
+//post-processing
+personsWithMessages = 
+	SELECT p 
+	FROM VS_p_1:p 
+	ACCUM  
+     p.@score += p.@propagAcc_2 * (1) ;
+
+/* __TF_HOP_END:23 */
+
+  personsWithScore = personsWithInterest UNION personsWithMessages;
+  /* __TF_HOP_BEGIN:26 */
+tmp =
+	SELECT p
+	FROM personsWithScore:p -(KNOWS:_e_3)- _:f
+	ACCUM p.@friendsScore += f.@score;
+/* __TF_HOP_END:27 */
+  personsWithScore = SELECT p FROM personsWithScore:p
+      ACCUM @@result += RESULT(p.id, p.@score, p.@friendsScore, p.@score + p.@friendsScore);
+
+  PRINT @@result as result;
+}

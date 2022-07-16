@@ -1,0 +1,76 @@
+D@20220715 23:24:51.497 tigergraph|127.0.0.1:47838|00000004709 (Util.java:1978) The original query is: 
+CREATE OR REPLACE DISTRIBUTED QUERY bi7(STRING tag) SYNTAX _v2 {
+
+  # count is a reserved keyword.
+  TYPEDEF TUPLE <STRING relatedTagName, UINT replyCount> RESULT;
+
+  HeapAccum<RESULT>(100, replyCount DESC, relatedTagName ASC) @@result;
+
+  SumAccum<UINT> @count;
+
+  //propagate to two down, check if the optim does this repition if it exists?
+  /*tagWithName = SELECT t FROM Tag:t WHERE t.name == tag;*/
+  replies = SELECT c FROM Tag:t -(<HAS_TAG.<REPLY_OF)- Comment:c
+   WHERE t.name == tag;
+  repliesWithTag =
+    SELECT r
+    FROM Tag:t -(<HAS_TAG)- replies:r 
+    WHERE t.name == tag;
+
+  repliesWithoutTag = replies MINUS repliesWithTag;
+
+  tmp =
+    SELECT t
+    FROM repliesWithoutTag:r -(HAS_TAG>)- Tag:t
+    ACCUM t.@count += 1
+    POST-ACCUM @@result += RESULT(t.name, t.@count);
+
+  PRINT @@result as result;
+}
+----------------------------------
+D@20220715 23:24:51.497 tigergraph|127.0.0.1:47838|00000004709 (Util.java:1978) After cost-optimization: 
+CREATE OR REPLACE DISTRIBUTED QUERY bi7(STRING tag) SYNTAX _v2 {
+
+  # count is a reserved keyword.
+  TYPEDEF TUPLE <STRING relatedTagName, UINT replyCount> RESULT;
+
+  HeapAccum<RESULT>(100, replyCount DESC, relatedTagName ASC) @@result;
+
+  SumAccum<UINT> @count;
+
+  //propagate to two down, check if the optim does this repition if it exists?
+  /*tagWithName = SELECT t FROM Tag:t WHERE t.name == tag;*/
+  /* __TF_HOP_BEGIN:12 */
+//pre-filter
+VS_t =
+        SELECT t 
+        FROM Tag:t 
+        WHERE t.name == tag;
+
+//traverse
+VS_c =
+        SELECT c
+        FROM VS_t:t -(<HAS_TAG:_e)- (Post|Comment):_v -(<REPLY_OF:_e_1)- _:c;
+
+//post-processing
+replies = VS_c;
+/* __TF_HOP_END:13 */
+  /* __TF_HOP_BEGIN:14 */
+repliesWithTag =
+        SELECT r
+        FROM replies:r -(HAS_TAG>:_e_2)- _:t
+        WHERE t.name == tag;
+/* __TF_HOP_END:17 */
+
+  repliesWithoutTag = replies MINUS repliesWithTag;
+
+  /* __TF_HOP_BEGIN:21 */
+tmp =
+    SELECT t
+    FROM repliesWithoutTag:r -( HAS_TAG> :_e_3 )- Tag:t
+    ACCUM t.@count += 1
+    POST-ACCUM @@result += RESULT(t.name, t.@count);
+/* __TF_HOP_END:25 */
+
+  PRINT @@result as result;
+}

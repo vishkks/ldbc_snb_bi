@@ -1,4 +1,4 @@
-CREATE OR REPLACE DISTRIBUTED QUERY bi10(VERTEX<Person> personId, STRING country, STRING tagClass) SYNTAX v2 {
+CREATE OR REPLACE DISTRIBUTED QUERY bi10(VERTEX<Person> personId, STRING country, STRING tagClass) SYNTAX _v2 {
   TYPEDEF TUPLE <UINT personId, STRING tagName, UINT messageCount> RESULT;
   OrAccum @visited, @selected;
   SetAccum<VERTEX<Tag>> @tags;
